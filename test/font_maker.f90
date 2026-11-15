@@ -68,13 +68,16 @@ contains
         font = sfnt(t)
     end function outline_font
 
-    function bitmap_font(ppem) result(font)
+    function bitmap_font(ppem, empty_glyf) result(font)
         !! A bitmap-only font with one 1-bit strike: glyphs 1..3 byte-aligned
         !! (image format 1, index format 1), glyphs 4..5 bit-packed (image
-        !! format 2, index format 3); glyph k shows bars k pixels wide.
+        !! format 2, index format 3); glyph k shows bars k pixels wide. With
+        !! `empty_glyf`, also empty glyf and loca tables and outline metrics in
+        !! hhea that differ from the strike's, as chicago95's .otb files have.
         integer, intent(in) :: ppem
+        logical, intent(in), optional :: empty_glyf
         integer(int8), allocatable :: font(:)
-        type(table_t) :: t(9)
+        type(table_t), allocatable :: t(:)
         integer(int8), allocatable :: ebdt(:), eblc(:), sub1(:), sub2(:)
         integer :: k, offsets(0:5), w, h
         ebdt = u32(int(z'00020000'))
@@ -95,6 +98,7 @@ contains
             u32(2), u32(0), line_metrics(ppem), line_metrics(ppem), u16(1), u16(5), &
             int([ppem, ppem, 1, 1], int8)]
         eblc = [eblc, u16(1), u16(3), u32(16), u16(4), u16(5), u32(16 + size(sub1)), sub1, sub2]
+        allocate (t(9))
         t(1) = table_t("EBDT", ebdt)
         t(2) = table_t("EBLC", eblc)
         t(3) = table_t("OS/2", os2(1000))
@@ -104,6 +108,14 @@ contains
         t(7) = table_t("hmtx", [(u16(500), u16(0), k = 0, 5)])
         t(8) = table_t("maxp", [u32(int(z'00005000')), u16(6)])
         t(9) = table_t("name", names("Maker Bitmap", "Regular"))
+        if (present(empty_glyf)) then
+            if (empty_glyf) then
+                t(6) = table_t("hhea", hhea(2048, 6))
+                ! Tags in order: glyf after cmap, loca after hmtx.
+                t = [t(1:4), table_t("glyf", [integer(int8) ::]), t(5:7), &
+                    table_t("loca", [(u16(0), k = 0, 6)]), t(8:9)]
+            end if
+        end if
         font = sfnt(t)
     end function bitmap_font
 

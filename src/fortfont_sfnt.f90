@@ -89,7 +89,8 @@ contains
         font%units_per_em = tt_ushort(data, font%head + 18)
         font%loc_format = tt_short(data, font%head + 50)
         font%num_glyphs = tt_ushort(data, font%maxp + 4)
-        font%outlines = font%glyf > 0 .and. font%loca > 0
+        ! An empty glyf table (bitmap fonts in sfnt form, .otb) holds no outlines.
+        font%outlines = font%glyf > 0 .and. font%loca > 0 .and. table_length("glyf") > 0
         if (font%hhea > 0) then
             font%ascender = tt_short(data, font%hhea + 4)
             font%descender = tt_short(data, font%hhea + 6)
@@ -139,6 +140,18 @@ contains
             table = tt_find_table(data, font%start, tag)
             if (table < 0) table = 0
         end function table
+        integer function table_length(tag)
+            character(4), intent(in) :: tag
+            integer :: k, n
+            table_length = 0
+            n = tt_ushort(data, font%start + 4)
+            do k = 0, n - 1
+                if (tt_tag_match(data, font%start + 12 + 16 * k, tag)) then
+                    table_length = tt_ulong(data, font%start + 12 + 16 * k + 12)
+                    return
+                end if
+            end do
+        end function table_length
     end function sfnt_open
 
     integer function sfnt_glyph(font, codepoint) result(g)

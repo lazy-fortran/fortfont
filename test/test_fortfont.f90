@@ -33,6 +33,7 @@ program test_fortfont
     end do
     call compare_bitmaps("bitmap font 11 px", bitmap_font(11), 11)
     call compare_bitmaps("bitmap font 16 px", bitmap_font(16), 16)
+    call compare_bitmaps("bitmap font with empty glyf, 11 px", bitmap_font(11, .true.), 11)
     call compare_colour("colour font 20 px", colour_font(20), 20)
     found_system = 0
     do k = 1, size(SYSTEM_FONTS)
