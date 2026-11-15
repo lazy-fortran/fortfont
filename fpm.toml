@@ -1,0 +1,22 @@
+name = "fortfont"
+version = "0.1.0"
+license = "MIT"
+author = "Christopher Albert"
+maintainer = "albert@tugraz.at"
+copyright = "Copyright 2026, Christopher Albert"
+description = "Fonts in Fortran: TrueType outlines and embedded bitmaps, font discovery"
+
+[build]
+auto-executables = false
+auto-tests = true
+
+[fortran]
+implicit-typing = false
+implicit-external = false
+source-form = "free"
+
+[dependencies]
+fortimg = { git = "https://github.com/lazy-fortran/fortimg.git", rev = "22716c3ed5424e1e463bde5e6bc0daf40d78cb2e" }
+
+[preprocess]
+cpp.suffixes = ["f90"]
