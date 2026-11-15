@@ -12,7 +12,8 @@ module fortfont
     implicit none
     private
     public :: font_t, glyph_t, font_open, font_open_file, font_set_size, font_has, &
-        font_glyph, font_advance, font_kerning, font_faces_in_file
+        font_glyph, font_advance, font_advance26, font_glyph_box, font_kerning, &
+        font_faces_in_file
     public :: sfnt_t
 
     type :: glyph_t
@@ -141,6 +142,63 @@ contains
         call sfnt_advance(font%sfnt, g, a, lsb)
         adv = round26(mul_fix(int(a, int64), font%x_scale))
     end function font_advance
+
+    integer function font_advance26(font, codepoint, fractional) result(adv)
+        !! The advance in 26.6 fixed point. `fractional`: unrounded, as FreeType's
+        !! fast advances give it for light hinting (FT_MulDiv of units and scale,
+        !! rounded from 16.16 to 26.6 as HarfBuzz reads it); else the whole-pixel
+        !! advance of hinted glyphs and bitmap strikes.
+        type(font_t), intent(in) :: font
+        integer, intent(in) :: codepoint
+        logical, intent(in) :: fractional
+        integer :: a, lsb
+        integer(int64) :: v
+        if (.not. fractional .or. .not. font%sfnt%outlines .or. &
+            (font%strike > 0 .and. .not. font%sfnt%outlines)) then
+            adv = 64 * font_advance(font, codepoint)
+            return
+        end if
+        call sfnt_advance(font%sfnt, sfnt_glyph(font%sfnt, codepoint), a, lsb)
+        v = (int(a, int64) * font%x_scale + 32) / 64 ! 16.16 pixels
+        adv = int((v + 512) / 1024) ! 26.6
+    end function font_advance26
+
+    subroutine font_glyph_box(font, codepoint, left, width)
+        !! A glyph's ink: first column (from the pen) and width in pixels, as
+        !! font_glyph renders it, without rendering.
+        type(font_t), intent(in) :: font
+        integer, intent(in) :: codepoint
+        integer, intent(out) :: left, width
+        type(tt_vertex_t), allocatable :: v(:)
+        type(sbit_t) :: sbit
+        integer :: g, nv, k, minx, maxx
+        left = 0
+        width = 0
+        g = sfnt_glyph(font%sfnt, codepoint)
+        if (font%strike > 0) then
+            if (sfnt_bitmap(font%sfnt, font%sfnt%strikes(font%strike), g, sbit)) then
+                left = sbit%left
+                width = sbit%width
+                return
+            end if
+        end if
+        if (.not. font%sfnt%outlines) return
+        call tt_get_glyph_shape(font%sfnt%data, font%sfnt%loca, font%sfnt%glyf, &
+            font%sfnt%loc_format, font%sfnt%num_glyphs, g, v, nv)
+        if (nv <= 0) return
+        minx = huge(1)
+        maxx = -huge(1)
+        do k = 1, nv
+            minx = min(minx, int(mul_fix(int(v(k)%x, int64), font%x_scale)))
+            maxx = max(maxx, int(mul_fix(int(v(k)%x, int64), font%x_scale)))
+            if (v(k)%vtype == 3) then
+                minx = min(minx, int(mul_fix(int(v(k)%cx, int64), font%x_scale)))
+                maxx = max(maxx, int(mul_fix(int(v(k)%cx, int64), font%x_scale)))
+            end if
+        end do
+        left = int(floor_div(int(minx, int64), 64_int64))
+        width = max(0, int(floor_div(int(maxx, int64) + 63, 64_int64)) - left)
+    end subroutine font_glyph_box
 
     integer function font_kerning(font, left, right) result(k)
         !! Kerning between two code points in whole pixels (kern table).

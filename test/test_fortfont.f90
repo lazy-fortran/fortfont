@@ -76,7 +76,7 @@ contains
         type(glyph_t) :: g
         type(ft_glyph_t) :: ref
         integer(int64) :: y_scale, a26, d26, h26
-        integer :: upem, asc, desc, k, d
+        integer :: upem, asc, desc, k, d, left, width
         character(80) :: what
         write (what, '(a, a, i0, a)') name, " at ", px, " px"
         call check(font_open(font, data, px), trim(what) // ": opens")
@@ -92,8 +92,14 @@ contains
             if (.not. ft_load(face, codepoints(k), FT_LOAD_TARGET_LIGHT, ref)) cycle
             call check(font_advance(font, codepoints(k)) * 64 == ref%advance26, &
                 trim(what) // ": advance of " // str(codepoints(k)))
+            call check(font_advance26(font, codepoints(k), .true.) == &
+                ft_fast_advance(face, codepoints(k)), trim(what) // &
+                ": fractional advance of " // str(codepoints(k)))
             if (.not. ft_load(face, codepoints(k), FT_LOAD_RENDER + FT_LOAD_NO_HINTING, ref)) cycle
             if (.not. font_glyph(font, codepoints(k), g)) cycle
+            call font_glyph_box(font, codepoints(k), left, width)
+            call check(left == g%left .and. (width == g%width .or. g%height == 0), trim(what) // &
+                ": ink box without rendering of " // str(codepoints(k)))
             call check(g%width == ref%width .and. g%height == ref%height .and. &
                 g%left == ref%left .and. g%top == ref%top, trim(what) // ": box of " // &
                 str(codepoints(k)) // " is " // box(g%width, g%height, g%left, g%top) // &

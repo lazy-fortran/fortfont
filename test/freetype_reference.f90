@@ -7,7 +7,7 @@ module freetype_reference
     implicit none
     private
     public :: freetype_open, ft_face_t, ft_face_open, ft_set_size, ft_load, ft_glyph_t, &
-        ft_metrics, ft_units, ft_kerning
+        ft_metrics, ft_units, ft_kerning, ft_fast_advance
 
     integer(c_int32_t), parameter, public :: FT_LOAD_DEFAULT = 0, FT_LOAD_NO_HINTING = 2, &
         FT_LOAD_RENDER = 4, FT_LOAD_TARGET_LIGHT = 65536, FT_LOAD_COLOR = 1048576
@@ -55,6 +55,13 @@ module freetype_reference
             type(c_ptr), value :: face
             integer(c_long), value :: code
         end function
+        integer(c_int) function fn_get_advance(face, glyph, flags, advance) bind(C)
+            import :: c_int, c_ptr, c_int32_t, c_long
+            type(c_ptr), value :: face
+            integer(c_int), value :: glyph
+            integer(c_int32_t), value :: flags
+            integer(c_long), intent(out) :: advance
+        end function
         integer(c_int) function fn_get_kerning(face, left, right, mode, vec) bind(C)
             import :: c_int, c_ptr, c_long
             type(c_ptr), value :: face
@@ -84,6 +91,7 @@ module freetype_reference
     procedure(fn_load_char), pointer :: FT_Load_Char => null()
     procedure(fn_char_index), pointer :: FT_Get_Char_Index => null()
     procedure(fn_get_kerning), pointer :: FT_Get_Kerning => null()
+    procedure(fn_get_advance), pointer :: FT_Get_Advance => null()
 
 contains
 
@@ -100,6 +108,7 @@ contains
         call c_f_procpointer(dlsym(lib, "FT_Load_Char" // c_null_char), FT_Load_Char)
         call c_f_procpointer(dlsym(lib, "FT_Get_Char_Index" // c_null_char), FT_Get_Char_Index)
         call c_f_procpointer(dlsym(lib, "FT_Get_Kerning" // c_null_char), FT_Get_Kerning)
+        call c_f_procpointer(dlsym(lib, "FT_Get_Advance" // c_null_char), FT_Get_Advance)
         freetype_open = FT_Init_FreeType(library) == 0
     end function freetype_open
 
@@ -216,6 +225,17 @@ contains
             FT_Get_Char_Index(f%face, int(right, c_long)), 1_c_int, vec) /= 0) vec = 0
         k26 = int(vec(1))
     end function ft_kerning
+
+    integer function ft_fast_advance(f, codepoint) result(adv26)
+        !! FT_Get_Advance with light hinting (16.16), rounded to 26.6 as HarfBuzz does.
+        type(ft_face_t), intent(in) :: f
+        integer, intent(in) :: codepoint
+        integer(c_long) :: a
+        a = 0
+        if (FT_Get_Advance(f%face, FT_Get_Char_Index(f%face, int(codepoint, c_long)), &
+            FT_LOAD_TARGET_LIGHT, a) /= 0) a = 0
+        adv26 = int((a + 512) / 1024)
+    end function ft_fast_advance
 
     ! --- raw field access ------------------------------------------------------
 
