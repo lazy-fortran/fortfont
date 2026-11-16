@@ -20,3 +20,10 @@ fortimg = { git = "https://github.com/lazy-fortran/fortimg.git", rev = "22716c3e
 
 [preprocess]
 cpp.suffixes = ["f90"]
+
+[features]
+platform.macos.preprocess.cpp.macros = ["__APPLE__"]
+platform.windows.preprocess.cpp.macros = ["_WIN32"]
+
+[profiles]
+default = ["platform"]

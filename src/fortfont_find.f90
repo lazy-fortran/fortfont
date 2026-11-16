@@ -24,26 +24,48 @@ module fortfont_find
     character(*), parameter :: CACHE_VERSION = "fortfont-index 1"
 
     interface
-        type(c_ptr) function opendir(name) bind(C, name="opendir")
+        type(c_ptr) function opendir(name) &
+#ifdef _WIN32
+                bind(C, name="fortfont_opendir")
+#else
+            bind(C, name="opendir")
+#endif
             import :: c_ptr, c_char
             character(kind=c_char), intent(in) :: name(*)
         end function
-        type(c_ptr) function readdir(dir) bind(C, name="readdir")
+        type(c_ptr) function readdir(dir) &
+#ifdef _WIN32
+                bind(C, name="fortfont_readdir")
+#else
+            bind(C, name="readdir")
+#endif
             import :: c_ptr
             type(c_ptr), value :: dir
         end function
-        integer(c_int) function closedir(dir) bind(C, name="closedir")
+        integer(c_int) function closedir(dir) &
+#ifdef _WIN32
+                bind(C, name="fortfont_closedir")
+#else
+            bind(C, name="closedir")
+#endif
             import :: c_ptr, c_int
             type(c_ptr), value :: dir
         end function
-        integer(c_int) function c_mkdir(path, mode) bind(C, name="mkdir")
+        integer(c_int) function c_mkdir(path, mode) &
+#ifdef _WIN32
+                bind(C, name="fortfont_mkdir")
+#else
+            bind(C, name="mkdir")
+#endif
             import :: c_int, c_char
             character(kind=c_char), intent(in) :: path(*)
             integer(c_int), value :: mode
         end function
     end interface
 
-#ifdef __APPLE__
+#ifdef _WIN32
+    integer, parameter :: DIRENT_TYPE = 0, DIRENT_NAME = 0
+#elif defined(__APPLE__)
     ! struct dirent of 64-bit-inode macOS: d_type at 20, d_name at 21.
     integer, parameter :: DIRENT_TYPE = 20, DIRENT_NAME = 21
 #else
@@ -64,8 +86,8 @@ contains
         character(len=:), allocatable, intent(out) :: path
         integer, intent(out) :: face
         character(len=:), allocatable, intent(out), optional :: matched
-        character(*), parameter :: SANS(5) = [character(16) :: "Noto Sans", "DejaVu Sans", &
-            "Liberation Sans", "Helvetica Neue", "Arial"]
+        character(*), parameter :: SANS(6) = [character(16) :: "Noto Sans", "DejaVu Sans", &
+            "Liberation Sans", "Segoe UI", "Helvetica Neue", "Arial"]
         character(*), parameter :: MONO(6) = [character(16) :: "Noto Sans Mono", &
             "DejaVu Sans Mono", "Liberation Mono", "Cascadia Mono", "Menlo", "Consolas"]
         integer :: k
@@ -213,7 +235,11 @@ contains
         paths = env("FORTFONT_PATH")
         if (len(paths) > 0) then
             do while (len(paths) > 0)
+#ifdef _WIN32
+                k = index(paths, ";")
+#else
                 k = index(paths, ":")
+#endif
                 if (k == 0) k = len(paths) + 1
                 if (k > 1) call walk(paths(:k - 1), 0)
                 paths = paths(min(k + 1, len(paths) + 1):)
@@ -222,10 +248,18 @@ contains
             return
         end if
         home = env("HOME")
+        if (len(home) == 0) home = env("USERPROFILE")
         data = env("XDG_DATA_HOME")
         if (len(data) == 0 .and. len(home) > 0) data = home // "/.local/share"
         if (len(data) > 0) call walk(data // "/fonts", 0)
         if (len(home) > 0) call walk(home // "/.fonts", 0)
+#ifdef _WIN32
+        data = env("WINDIR")
+        if (len(data) == 0) data = "C:/Windows"
+        call walk(data // "/Fonts", 0)
+        data = env("LOCALAPPDATA")
+        if (len(data) > 0) call walk(data // "/Microsoft/Windows/Fonts", 0)
+#endif
         call walk("/usr/share/fonts", 0)
         call walk("/usr/local/share/fonts", 0)
 #ifdef __APPLE__
@@ -295,7 +329,11 @@ contains
         character(kind=c_char), pointer :: bytes(:)
         integer :: k
         call c_f_pointer(e, bytes, [DIRENT_NAME + 256])
+#ifdef _WIN32
+        kind = DT_UNKNOWN
+#else
         kind = iachar(bytes(DIRENT_TYPE + 1))
+#endif
         k = 0
         do while (k < 256)
             if (bytes(DIRENT_NAME + k + 1) == c_null_char) exit
