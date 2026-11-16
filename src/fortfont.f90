@@ -6,12 +6,16 @@ module fortfont
     use fortfont_sfnt, only: sfnt_t, strike_t, sbit_t, sfnt_open, sfnt_glyph, sfnt_advance, &
         sfnt_faces, sfnt_bitmap, sfnt_kerning
     use fortfont_tt_outlines, only: tt_vertex_t, tt_get_glyph_shape
+    use fortfont_tt_hint, only: hinter_t, hinter_setup, hinter_size, hinter_glyph
     use fortfont_tt_curves, only: tt_point_t, tt_flatten_curves
     use fortfont_tt_rasterizer, only: tt_rasterize
+    use fortfont_tt_binary, only: tt_byte, tt_short, tt_ushort
+    use fortfont_tt_metrics, only: tt_get_glyf_offset
     use fortimg, only: image_t, png_decode, image_convert, IMG_OK
     implicit none
     private
-    public :: font_t, glyph_t, font_open, font_open_file, font_set_size, font_has, &
+    public :: font_t, glyph_t, font_open, font_open_file, font_set_size, font_set_hinting, &
+        font_has, &
         font_glyph, font_advance, font_advance26, font_glyph_box, font_kerning, &
         font_faces_in_file
     public :: sfnt_t
@@ -31,6 +35,9 @@ module fortfont
         integer :: strike = 0 ! embedded bitmap strike in use, 0 for outlines
         integer :: ascent = 0, descent = 0, height = 0, line_skip = 0
         integer(int64) :: x_scale = 0, y_scale = 0 ! 16.16, as FreeType's size metrics
+        !! The font's own hinting instructions run (font_set_hinting).
+        logical :: hinted = .false.
+        type(hinter_t) :: hinter
     end type font_t
 
 contains
@@ -68,6 +75,23 @@ contains
         if (ios /= 0) return
         ok = font_open(font, data, pixels, face)
     end function font_open_file
+
+    subroutine font_set_hinting(font, on)
+        !! Outline glyphs hinted by the font's own TrueType instructions, as
+        !! FreeType's default interpreter runs them for grey-scale text (the
+        !! desktop's text): vertically fitted to the pixel grid, horizontally
+        !! exact. Fonts that FreeType auto-hints instead (no fpgm, at most 7
+        !! bytes of prep) stay unhinted.
+        type(font_t), intent(inout) :: font
+        logical, intent(in) :: on
+        font%hinted = .false.
+        if (.not. on .or. .not. font%sfnt%outlines) return
+        call hinter_setup(font%hinter, font%sfnt%data, font%sfnt%start, font%sfnt%loca, &
+            font%sfnt%glyf, font%sfnt%loc_format, font%sfnt%num_glyphs, font%sfnt%hmtx, &
+            font%sfnt%num_hmetrics, font%sfnt%ascender, font%sfnt%descender)
+        call hinter_size(font%hinter, font%size, font%y_scale)
+        font%hinted = font%hinter%sized
+    end subroutine font_set_hinting
 
     subroutine font_set_size(font, pixels)
         !! Pixels per em. A bitmap-only font takes its nearest strike; an outline
@@ -119,6 +143,10 @@ contains
             font%y_scale))
         font%line_skip = ceil26(mul_fix(int(font%sfnt%ascender - font%sfnt%descender + &
             font%sfnt%line_gap, int64), font%y_scale))
+        if (font%hinted) then
+            call hinter_size(font%hinter, font%size, font%y_scale)
+            font%hinted = font%hinter%sized
+        end if
     end subroutine font_set_size
 
     logical function font_has(font, codepoint)
@@ -267,6 +295,8 @@ contains
         !! The outline scaled to 26.6 fixed point as FreeType scales it, its box
         !! rounded out to whole pixels, filled with exact area coverage
         !! (stb_truetype's rasteriser) after flattening curves to 1/16 pixel.
+        !! Glyphs flagged as overlapping are filled at four times the size and
+        !! averaged, as FreeType's smooth renderer does.
         type(font_t), intent(in) :: font
         integer, intent(in) :: g
         type(glyph_t), intent(inout) :: glyph
@@ -274,20 +304,27 @@ contains
         type(tt_point_t), allocatable :: pts(:)
         integer, allocatable :: wcount(:)
         integer :: nv, nw, a, lsb, k, x0, y0, x1, y1, minx, maxx, miny, maxy
-        integer(int8), allocatable :: buf(:)
+        integer(int8), allocatable :: buf(:), big(:)
         real(dp), parameter :: S = 1.0_dp / 64
+        integer, parameter :: OS = 4
+        integer :: x, y, i, j, cover
+        logical :: hinted
         call sfnt_advance(font%sfnt, g, a, lsb)
         glyph%advance = round26(mul_fix(int(a, int64), font%x_scale))
-        call tt_get_glyph_shape(font%sfnt%data, font%sfnt%loca, font%sfnt%glyf, &
-            font%sfnt%loc_format, font%sfnt%num_glyphs, g, v, nv)
+        hinted = .false.
+        if (font%hinted) call hinter_glyph(font%hinter, g, font%x_scale, v, nv, hinted)
+        if (.not. hinted) then
+            call tt_get_glyph_shape(font%sfnt%data, font%sfnt%loca, font%sfnt%glyf, &
+                font%sfnt%loc_format, font%sfnt%num_glyphs, g, v, nv)
+            do k = 1, nv
+                v(k)%x = int(mul_fix(int(v(k)%x, int64), font%x_scale))
+                v(k)%y = int(mul_fix(int(v(k)%y, int64), font%y_scale))
+                v(k)%cx = int(mul_fix(int(v(k)%cx, int64), font%x_scale))
+                v(k)%cy = int(mul_fix(int(v(k)%cy, int64), font%y_scale))
+            end do
+        end if
         allocate (glyph%alpha(0, 0))
         if (nv <= 0) return
-        do k = 1, nv
-            v(k)%x = int(mul_fix(int(v(k)%x, int64), font%x_scale))
-            v(k)%y = int(mul_fix(int(v(k)%y, int64), font%y_scale))
-            v(k)%cx = int(mul_fix(int(v(k)%cx, int64), font%x_scale))
-            v(k)%cy = int(mul_fix(int(v(k)%cy, int64), font%y_scale))
-        end do
         ! The control box: on-curve points and the control points of curves.
         minx = huge(1)
         maxx = -huge(1)
@@ -314,14 +351,74 @@ contains
         glyph%left = x0
         glyph%top = -y0
         if (glyph%width == 0 .or. glyph%height == 0) return
-        call tt_flatten_curves(v, nv, 64.0_dp / 16, pts, wcount, nw)
         allocate (buf(glyph%width * glyph%height))
         buf = 0
-        call tt_rasterize(buf, glyph%width, glyph%height, glyph%width, pts, wcount, nw, S, S, &
-            0.0_dp, 0.0_dp, x0, y0, .true.)
+        if (glyph_overlaps(font, g, 0)) then
+            call tt_flatten_curves(v, nv, 64.0_dp / 16 / OS, pts, wcount, nw)
+            allocate (big(OS * OS * glyph%width * glyph%height))
+            big = 0
+            call tt_rasterize(big, OS * glyph%width, OS * glyph%height, OS * glyph%width, pts, &
+                wcount, nw, OS * S, OS * S, 0.0_dp, 0.0_dp, OS * x0, OS * y0, .true.)
+            ! Each subpixel adds its coverage in 1/16, the total clamped to 255.
+            do y = 0, glyph%height - 1
+                do x = 0, glyph%width - 1
+                    cover = 0
+                    do j = 0, OS - 1
+                        do i = 0, OS - 1
+                            cover = cover + (iand(int(big((OS * y + j) * OS * glyph%width + &
+                                OS * x + i + 1)), 255) + OS * OS / 2) / (OS * OS)
+                        end do
+                    end do
+                    buf(y * glyph%width + x + 1) = int(min(cover, 255) - merge(256, 0, &
+                        min(cover, 255) > 127), int8)
+                end do
+            end do
+        else
+            call tt_flatten_curves(v, nv, 64.0_dp / 16, pts, wcount, nw)
+            call tt_rasterize(buf, glyph%width, glyph%height, glyph%width, pts, wcount, nw, S, S, &
+                0.0_dp, 0.0_dp, x0, y0, .true.)
+        end if
         deallocate (glyph%alpha)
         glyph%alpha = reshape(buf, [glyph%width, glyph%height])
     end subroutine outline_glyph
+
+    recursive logical function glyph_overlaps(font, g, depth) result(yes)
+        !! FreeType's FT_OUTLINE_OVERLAP: the first point of a simple glyph, or
+        !! of any simple component, flagged OVERLAP_SIMPLE, or the first
+        !! component of a composite flagged OVERLAP_COMPOUND.
+        type(font_t), intent(in) :: font
+        integer, intent(in) :: g, depth
+        integer :: off, nc, p, flags
+        logical :: first
+        yes = .false.
+        if (depth > 8) return
+        off = tt_get_glyf_offset(font%sfnt%data, font%sfnt%loca, font%sfnt%glyf, &
+            font%sfnt%loc_format, font%sfnt%num_glyphs, g)
+        if (off < 0) return
+        nc = tt_short(font%sfnt%data, off)
+        if (nc > 0) then
+            p = off + 10 + 2 * nc
+            yes = iand(tt_byte(font%sfnt%data, p + 2 + tt_ushort(font%sfnt%data, p)), 64) /= 0
+        else if (nc < 0) then
+            p = off + 10
+            first = .true.
+            do
+                flags = tt_ushort(font%sfnt%data, p)
+                if (first .and. iand(flags, 1024) /= 0) yes = .true.
+                first = .false.
+                if (glyph_overlaps(font, tt_ushort(font%sfnt%data, p + 2), depth + 1)) yes = .true.
+                p = p + 4 + merge(4, 2, iand(flags, 1) /= 0)
+                if (iand(flags, 8) /= 0) then
+                    p = p + 2
+                else if (iand(flags, 64) /= 0) then
+                    p = p + 4
+                else if (iand(flags, 128) /= 0) then
+                    p = p + 8
+                end if
+                if (iand(flags, 32) == 0) exit
+            end do
+        end if
+    end function glyph_overlaps
 
     function box_scale(src, w, h) result(out)
         !! RGBA scaled to w x h by averaging the source pixels each one covers.

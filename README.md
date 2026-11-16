@@ -19,7 +19,12 @@ end if
 
 - Outlines (`glyf`, simple and composite) filled with exact area coverage,
   scaled in FreeType's 26.6 fixed point so that metrics, advances and glyph
-  boxes equal FreeType's; unhinted.
+  boxes equal FreeType's. Overlapping contours are filled at four times the
+  size and averaged, as FreeType does.
+- Hinting (`font_set_hinting`): the font's TrueType instructions run as in
+  FreeType's default interpreter (version 40, grey-scale), so hinted glyphs
+  equal FreeType's and the desktop's. Fonts that FreeType auto-hints (no
+  `fpgm`, at most 7 bytes of `prep`) stay unhinted.
 - Embedded bitmaps: monochrome and grey strikes (EBLC/EBDT, as in `.otb`
   bitmap fonts) and colour glyphs (CBLC/CBDT, PNG through
   [fortimg](https://github.com/lazy-fortran/fortimg)).
@@ -44,5 +49,7 @@ The tests build their fonts in memory (outline, bitmap and colour fonts) and
 compare fortfont with FreeType (`libfreetype.so.6`, opened at run time, test
 only): metrics, advances, kerning and glyph boxes equal, bitmap and colour
 glyphs equal, outline coverage within 24 of 255. The system's DejaVu Sans and
-DejaVu Sans Mono are compared as well, and chicago95's bitmap fonts where they
-are installed. Font discovery runs on a font folder the test writes.
+DejaVu Sans Mono are compared as well, unhinted and hinted, and where installed
+chicago95's bitmap fonts and hinted More Perfect DOS VGA, Liberation Sans and
+Mono, Times New Roman and Roboto. Font discovery runs on a font folder the
+test writes.

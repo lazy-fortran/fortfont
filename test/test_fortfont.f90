@@ -3,6 +3,8 @@ program test_fortfont
     !! by FreeType (opened at run time): equal metrics, advances, kerning and
     !! glyph boxes; equal bitmap and colour glyphs; outline coverage within a
     !! small tolerance (both compute exact area coverage, in different order).
+    !! Hinted by the fonts' own TrueType instructions, glyphs equal FreeType's
+    !! default (native, v40) hinting in box and, within the tolerance, coverage.
     use iso_fortran_env, only: int8, int64
     use fortfont
     use font_maker, only: outline_font, bitmap_font, colour_font, CHARS
@@ -19,6 +21,15 @@ program test_fortfont
     character(*), parameter :: OPTIONAL_BITMAP_FONTS(3) = [character(64) :: &
         "/usr/share/fonts/misc/chicago95/crox1h.otb", &
         "/usr/share/fonts/misc/chicago95/crox1hb.otb", "/usr/share/fonts/misc/chicago95/crox4hb.otb"]
+    ! TrueType fonts with instructions, where installed: a DOS VGA font on a
+    ! pixel grid, fonts whose programs ask GETINFO for the smoothing (Liberation),
+    ! flip points (Times) or overlap their contours (Roboto).
+    character(*), parameter :: OPTIONAL_HINTED_FONTS(5) = [character(64) :: &
+        "/usr/share/fonts/TTF/MorePerfectDOSVGA.ttf", &
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf", &
+        "/usr/share/fonts/liberation/LiberationMono-Regular.ttf", &
+        "/usr/share/fonts/TTF/Times.TTF", &
+        "/usr/share/fonts/TTF/Roboto-Regular.ttf"]
     integer :: worst_coverage, found_system, j
     logical :: exists
 
@@ -46,6 +57,22 @@ program test_fortfont
         end do
     end do
     call check(found_system >= 2, "DejaVu Sans and DejaVu Sans Mono are installed")
+    do k = 1, size(SYSTEM_FONTS)
+        inquire (file=trim(SYSTEM_FONTS(k)), exist=exists)
+        if (.not. exists) cycle
+        do px = 9, 24
+            call compare_hinted(trim(SYSTEM_FONTS(k)), read_file(trim(SYSTEM_FONTS(k))), px, &
+                [(j, j = 32, 126), 228, 246, 252, 223, 8364])
+        end do
+    end do
+    do k = 1, size(OPTIONAL_HINTED_FONTS)
+        inquire (file=trim(OPTIONAL_HINTED_FONTS(k)), exist=exists)
+        if (.not. exists) cycle
+        do px = 12, 24
+            call compare_hinted(trim(OPTIONAL_HINTED_FONTS(k)), &
+                read_file(trim(OPTIONAL_HINTED_FONTS(k))), px, [(j, j = 32, 126)])
+        end do
+    end do
     ! Real bitmap and colour fonts, where installed: chicago95 (classic theme)
     ! and Noto Color Emoji; the generated fonts cover their formats everywhere.
     do k = 1, size(OPTIONAL_BITMAP_FONTS)
@@ -115,6 +142,39 @@ contains
             64 * floor((ft_kerning(face, 65, 66) + 32) / 64.0), &
             trim(what) // ": kerning")
     end subroutine compare_outlines
+
+    subroutine compare_hinted(name, data, px, codepoints)
+        !! fortfont with the font's instructions against FreeType's default
+        !! hinting: the same glyph box, coverage within the tolerance.
+        character(*), intent(in) :: name
+        integer(int8), intent(in) :: data(:)
+        integer, intent(in) :: px, codepoints(:)
+        type(font_t) :: font
+        type(ft_face_t) :: face
+        type(glyph_t) :: g
+        type(ft_glyph_t) :: ref
+        integer :: k, d
+        character(96) :: what
+        write (what, '(a, a, i0, a)') name, " hinted at ", px, " px"
+        call check(font_open(font, data, px), trim(what) // ": opens")
+        call font_set_hinting(font, .true.)
+        call check(font%hinted, trim(what) // ": runs the font's instructions")
+        call check(ft_face_open(face, data), trim(what) // ": FreeType opens")
+        call check(ft_set_size(face, px), trim(what) // ": FreeType size")
+        do k = 1, size(codepoints)
+            if (.not. ft_load(face, codepoints(k), FT_LOAD_RENDER + FT_LOAD_DEFAULT, ref)) cycle
+            if (.not. font_glyph(font, codepoints(k), g)) cycle
+            call check(g%width == ref%width .and. g%height == ref%height .and. &
+                g%left == ref%left .and. g%top == ref%top, trim(what) // ": box of " // &
+                str(codepoints(k)) // " is " // box(g%width, g%height, g%left, g%top) // &
+                ", FreeType " // box(ref%width, ref%height, ref%left, ref%top))
+            if (g%width /= ref%width .or. g%height /= ref%height .or. g%width == 0) cycle
+            d = maxval(abs(u8(g%alpha) - u8(ref%pixels(1, :, :))))
+            worst_coverage = max(worst_coverage, d)
+            call check(d <= COVERAGE_TOLERANCE, trim(what) // ": coverage of " // &
+                str(codepoints(k)) // " differs by " // str(d))
+        end do
+    end subroutine compare_hinted
 
     subroutine compare_bitmaps(name, data, px)
         character(*), intent(in) :: name
